@@ -1,5 +1,6 @@
-"""Gradio demo: search for papers on a topic, get an expert-level critical
-analysis of any paper, and ask grounded follow-up questions about it."""
+"""Gradio demo: search for papers on a topic, get a cross-paper literature
+synthesis, an expert-level critical analysis of any single paper, and ask
+grounded follow-up questions about it."""
 
 import os
 
@@ -10,14 +11,16 @@ from src.pdf_extract import extract_full_text
 from src.rag import PaperIndex
 from src.semantic_scholar import enrich_with_citations, rank_papers
 from src.summarize import analyze_paper, answer_question, evaluate_summary
+from src.synthesize import synthesize_literature
 
 # Cache of loaded papers this session: arxiv_id -> {full_text, index}
 _paper_cache: dict[str, dict] = {}
 _last_search_results: list[dict] = []
+_last_topic: str = ""
 
 
 def do_search(topic: str):
-    global _last_search_results
+    global _last_search_results, _last_topic
     if not topic.strip():
         return "Enter a research topic first.", gr.update(choices=[])
 
@@ -25,6 +28,7 @@ def do_search(topic: str):
     papers = enrich_with_citations(papers)
     papers = rank_papers(papers)
     _last_search_results = papers
+    _last_topic = topic
 
     lines = [f"**Top papers for \"{topic}\":**\n"]
     choices = []
@@ -40,6 +44,15 @@ def do_search(topic: str):
         choices.append(p["title"])
 
     return "\n".join(lines), gr.update(choices=choices, value=choices[0] if choices else None)
+
+
+def do_synthesize(progress=gr.Progress()):
+    if not _last_search_results:
+        return "Search a topic first (on the Search tab)."
+    progress(0.3, desc=f"Synthesizing across {min(10, len(_last_search_results))} papers...")
+    synthesis = synthesize_literature(_last_search_results, _last_topic)
+    progress(1.0)
+    return synthesis
 
 
 def load_paper(title: str, progress=gr.Progress()):
@@ -91,28 +104,39 @@ with gr.Blocks(title="Research Paper Assistant") as demo:
     gr.Markdown(
         "# Research Paper Discovery & Analysis Assistant\n"
         "Search a topic, get real ranked papers (arXiv + Semantic Scholar citation counts), "
-        "then get an expert-level critical analysis of any paper and ask grounded follow-up "
-        "questions -- answers are retrieved from the actual paper text, not general knowledge."
+        "then either synthesize themes across the whole set or get an expert-level critical "
+        "analysis of one paper with grounded follow-up Q&A."
     )
 
-    topic_input = gr.Textbox(label="Research topic", placeholder="e.g. reinforcement learning for robot navigation")
+    topic_input = gr.Textbox(label="Research topic", placeholder="e.g. decentralized multi-agent trajectory planning")
     search_btn = gr.Button("Search", variant="primary")
     search_results = gr.Markdown()
 
-    gr.Markdown("---")
-    paper_select = gr.Dropdown(label="Select a paper to analyze", choices=[])
-    analyze_btn = gr.Button("Analyze paper", variant="primary")
-    analysis_output = gr.Markdown()
+    with gr.Tab("Literature synthesis"):
+        gr.Markdown(
+            "Synthesizes themes, approaches, evolution over time, tradeoffs, and gaps "
+            "*across* the searched papers -- not a summary of each one, the actual "
+            "literature-review-style picture a field skim gives you."
+        )
+        synth_btn = gr.Button("Synthesize across found papers", variant="primary")
+        synth_output = gr.Markdown()
+        synth_btn.click(do_synthesize, outputs=synth_output)
 
-    gr.Markdown("### Ask follow-up questions about this paper")
-    chatbot = gr.Chatbot()
-    question_input = gr.Textbox(label="Question", placeholder="e.g. What are the main limitations?")
-    ask_btn = gr.Button("Ask")
+    with gr.Tab("Single-paper analysis"):
+        paper_select = gr.Dropdown(label="Select a paper to analyze", choices=[])
+        analyze_btn = gr.Button("Analyze paper", variant="primary")
+        analysis_output = gr.Markdown()
+
+        gr.Markdown("### Ask follow-up questions about this paper")
+        chatbot = gr.Chatbot()
+        question_input = gr.Textbox(label="Question", placeholder="e.g. What are the main limitations?")
+        ask_btn = gr.Button("Ask")
+
+        analyze_btn.click(load_paper, inputs=paper_select, outputs=[analysis_output, chatbot])
+        ask_btn.click(ask_followup, inputs=[paper_select, question_input, chatbot], outputs=[chatbot, question_input])
+        question_input.submit(ask_followup, inputs=[paper_select, question_input, chatbot], outputs=[chatbot, question_input])
 
     search_btn.click(do_search, inputs=topic_input, outputs=[search_results, paper_select])
-    analyze_btn.click(load_paper, inputs=paper_select, outputs=[analysis_output, chatbot])
-    ask_btn.click(ask_followup, inputs=[paper_select, question_input, chatbot], outputs=[chatbot, question_input])
-    question_input.submit(ask_followup, inputs=[paper_select, question_input, chatbot], outputs=[chatbot, question_input])
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)))
