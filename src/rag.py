@@ -1,23 +1,15 @@
-"""Chunks a paper's full text, embeds chunks locally (no API cost), and
-retrieves the most relevant chunks for a question -- so Q&A answers are
-grounded in the actual paper text rather than the model's general knowledge
-(and, unlike model knowledge, works even for very recent papers)."""
+"""Chunks a paper's full text, embeds chunks via the Gemini API (not a local
+model -- see llm.py's docstring for why), and retrieves the most relevant
+chunks for a question -- so Q&A answers are grounded in the actual paper
+text rather than the model's general knowledge (and, unlike model
+knowledge, works even for very recent papers)."""
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+from src.llm import embed_texts
 
 CHUNK_SIZE = 1000  # characters
 CHUNK_OVERLAP = 200
-_MODEL_NAME = "all-MiniLM-L6-v2"
-
-_model = None
-
-
-def _get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(_MODEL_NAME)
-    return _model
 
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -38,12 +30,10 @@ class PaperIndex:
 
     def __init__(self, text: str):
         self.chunks = chunk_text(text)
-        model = _get_model()
-        self.embeddings = model.encode(self.chunks, convert_to_numpy=True, normalize_embeddings=True)
+        self.embeddings = embed_texts(self.chunks)
 
     def retrieve(self, question: str, k: int = 4) -> list[str]:
-        model = _get_model()
-        query_vec = model.encode([question], convert_to_numpy=True, normalize_embeddings=True)[0]
+        query_vec = embed_texts([question])[0]
         scores = self.embeddings @ query_vec
         top_idx = np.argsort(-scores)[:k]
         return [self.chunks[i] for i in top_idx]

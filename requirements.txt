@@ -1,9 +1,7 @@
 requests>=2.31.0
 feedparser>=6.0.10
 pdfplumber>=0.11.0
-sentence-transformers>=3.0.0
 numpy>=1.26.0
-scikit-learn>=1.4.0
 rouge-score>=0.1.2
 google-genai>=0.3.0
 gradio>=4.40.0
