@@ -7,3 +7,4 @@ data/
 .gradio/
 .pytest_cache/
 *.egg-info/
+ANALYSIS.md
