@@ -7,6 +7,7 @@ import os
 import gradio as gr
 
 from src.arxiv_search import search_arxiv
+from src.cache import load_cached, save_cached
 from src.pdf_extract import extract_full_text
 from src.rag import PaperIndex
 from src.semantic_scholar import enrich_with_citations, rank_papers
@@ -60,16 +61,42 @@ def load_paper(title: str, progress=gr.Progress()):
     if paper is None:
         return "Pick a paper from the search results first.", {}
 
-    if paper["arxiv_id"] not in _paper_cache:
-        progress(0.2, desc="Downloading and extracting PDF...")
-        full_text = extract_full_text(paper["pdf_url"])
-        progress(0.5, desc="Building retrieval index...")
-        index = PaperIndex(full_text)
-        _paper_cache[paper["arxiv_id"]] = {"full_text": full_text, "index": index, "paper": paper}
+    arxiv_id = paper["arxiv_id"]
+    if arxiv_id not in _paper_cache:
+        disk_entry = load_cached(arxiv_id)
+        if disk_entry is not None:
+            # Disk cache hit: skips the PDF download, the extraction, and
+            # (most importantly) the Gemini embedding API call entirely --
+            # see src/cache.py for what this does and doesn't guarantee.
+            progress(0.6, desc="Loaded from cache (no re-download or re-embedding needed)...")
+            full_text = disk_entry["full_text"]
+            index = PaperIndex(chunks=disk_entry["chunks"], embeddings=disk_entry["embeddings"])
+            analysis = disk_entry.get("analysis")
+        else:
+            progress(0.2, desc="Downloading and extracting PDF...")
+            full_text = extract_full_text(paper["pdf_url"])
+            progress(0.5, desc="Building retrieval index...")
+            index = PaperIndex(text=full_text)
+            analysis = None
+        _paper_cache[arxiv_id] = {"full_text": full_text, "index": index, "paper": paper, "analysis": analysis}
 
-    progress(0.7, desc="Generating expert analysis...")
-    entry = _paper_cache[paper["arxiv_id"]]
-    analysis = analyze_paper(entry["full_text"])
+    entry = _paper_cache[arxiv_id]
+    if entry.get("analysis") is None:
+        # Also fixes a real pre-existing inefficiency: this used to call
+        # analyze_paper unconditionally on every click, even for a paper
+        # already analyzed earlier in the *same* session -- a redundant
+        # Gemini generation call every time "Analyze paper" was clicked
+        # again for the same paper.
+        progress(0.7, desc="Generating expert analysis...")
+        entry["analysis"] = analyze_paper(entry["full_text"])
+        save_cached(arxiv_id, {
+            "full_text": entry["full_text"],
+            "chunks": entry["index"].chunks,
+            "embeddings": entry["index"].embeddings,
+            "analysis": entry["analysis"],
+        })
+
+    analysis = entry["analysis"]
     scores = evaluate_summary(analysis, paper["abstract"])
 
     progress(1.0)

@@ -26,11 +26,21 @@ class PaperIndex:
     """An in-memory retrieval index over one paper's chunked text. A vector
     DB would be overkill here -- one paper's chunks (tens, not millions)
     fits comfortably in memory, and cosine similarity over a small numpy
-    array is fast enough to not need approximate search."""
+    array is fast enough to not need approximate search.
 
-    def __init__(self, text: str):
-        self.chunks = chunk_text(text)
-        self.embeddings = embed_texts(self.chunks)
+    Accepts either raw `text` (chunks + embeds it fresh) or precomputed
+    `chunks`/`embeddings` (skips both chunking and the Gemini embedding
+    API call entirely) -- the latter is what src/cache.py's disk cache
+    reconstructs from, so a previously-processed paper never needs its
+    chunks re-embedded."""
+
+    def __init__(self, text: str | None = None, chunks: list[str] | None = None, embeddings: np.ndarray | None = None):
+        if chunks is not None and embeddings is not None:
+            self.chunks = chunks
+            self.embeddings = embeddings
+        else:
+            self.chunks = chunk_text(text)
+            self.embeddings = embed_texts(self.chunks)
 
     def retrieve(self, question: str, k: int = 4) -> list[str]:
         query_vec = embed_texts([question])[0]
